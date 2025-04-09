@@ -1,0 +1,16 @@
+# .swiftlint.yml
+
+# Completely disable all specified rules so they never generate warnings
+disabled_rules:
+  - function_body_length
+  - identifier_name
+  - trailing_whitespace
+  - file_length
+  - type_body_length
+  - cyclomatic_complexity
+  - unneeded_break_in_switch
+  - opening_brace
+  - multiple_closures_with_trailing_closure
+  - line_length
+  - trailing_comma
+
