@@ -1,20 +1,16 @@
-import CoreGraphics
-import CoreImage
 import ImageIO
 import Metal
-import MetalKit
 import UIKit
 import UniformTypeIdentifiers
 
-func getTimeStamp() -> String {
-    let dateFormatter = DateFormatter()
-    dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
-    return dateFormatter.string(from: Date())
+public enum OutFormat {
+    case png
+    case heic
 }
 
-// Converts from texture to png
-public func convertMetalTextureToPNG(texture: MTLTexture, fileName: String,
-                                     projectDir: String, completion: ((Bool) -> Void)? = nil)
+// Uses BGRA since metal uses it as default
+public func metalTextureToImage(texture: MTLTexture, fileName: String,
+                                projectDir: String, outFormat: OutFormat)
 {
     // 1. Configure texture descriptor for CPU access
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -83,8 +79,8 @@ public func convertMetalTextureToPNG(texture: MTLTexture, fileName: String,
                   bitsPerComponent: 8,
                   bytesPerRow: bytesPerRow,
                   space: colorSpace,
-                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-              ) // Use noneSkipLast to treat as RGB
+                  bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.noneSkipFirst.rawValue
+              )
         else {
             free(rawData)
             logger.log("ERROR: Failed to create CGContext")
@@ -96,176 +92,118 @@ public func convertMetalTextureToPNG(texture: MTLTexture, fileName: String,
             logger.log("ERROR: Failed to create CGImage")
             return
         }
-
-        let image = UIImage(cgImage: cgImage)
-        guard let pngData = image.pngData() else {
-            free(rawData)
-            logger.log("ERROR: Failed to create PNG data")
-            return
-        }
-
-        // Validate and prepare project directory path
-        let fileManager = FileManager.default
-        let projectDirectoryURL = URL(fileURLWithPath: projectDir)
-
-        // Verify directory exists
-        var isDirectory: ObjCBool = false
-        if !fileManager.fileExists(
-            atPath: projectDir, isDirectory: &isDirectory
-        )
-            || !isDirectory.boolValue
-        {
-            do {
-                logger.log("\(projectDir)")
-                try fileManager.createDirectory(
-                    at: projectDirectoryURL, withIntermediateDirectories: true
-                )
-            } catch {
-                free(rawData)
-                logger.log(
-                    "ERROR: Could not create project directory: \(error.localizedDescription)"
-                )
-                return
-            }
-        }
-
-        let filePath = projectDirectoryURL.appendingPathComponent(
-            "\(fileName)_\(getTimeStamp()).png")
-
-        do {
-            try pngData.write(to: filePath)
-            logger.log("SUCCESS: Metal texture saved as PNG at \(filePath.path)")
-            free(rawData)
-            completion?(true)
-            return
-        } catch {
-            logger.log(
-                "ERROR: Failed to write PNG file: \(error.localizedDescription)"
-            )
-            free(rawData)
-            return
-        }
+        WriteCGIMage(cgImage: cgImage, projectDir: projectDir, fileName: fileName, outFormat: outFormat)
+        free(rawData)
     }
 
     commandBuffer.commit()
 }
 
-func saveMetalTextureAsBMP(texture: MTLTexture, url: URL, completion: ((Bool) -> Void)? = nil) {
-    let device = texture.device
-    let width = texture.width
-    let height = texture.height
-    // RGB data with padding for alignment
-    let bytesPerRow = width * 4
-    let bufferSize = bytesPerRow * height
+// Encodes data from CGIMage buffer and writes to disk
+func WriteCGIMage(cgImage: CGImage, projectDir: String, fileName: String, outFormat: OutFormat) {
+    let image = UIImage(cgImage: cgImage)
+    var textureData: Data?
+    var fileExtension: String
 
-    guard let sharedBuffer = device.makeBuffer(length: bufferSize, options: .storageModeShared) else {
-        logger.log("Failed to create shared buffer")
-        completion?(false)
+    switch outFormat {
+    case .png:
+        textureData = image.pngData()
+        fileExtension = ".png"
+    case .heic:
+        textureData = image.heicData()
+        fileExtension = ".heic"
+    }
+
+    guard let encodedData = textureData else {
+        logger.log("ERROR: Failed to encode data")
         return
     }
 
-    guard let commandQueue = device.makeCommandQueue(),
-          let commandBuffer = commandQueue.makeCommandBuffer()
-    else {
-        completion?(false)
+    // Validate and prepare project directory path
+    let fileManager = FileManager.default
+    let projectDirectoryURL = URL(fileURLWithPath: projectDir)
+
+    // Verify directory exists
+    var isDirectory: ObjCBool = false
+    if !fileManager.fileExists(
+        atPath: projectDir, isDirectory: &isDirectory
+    )
+        || !isDirectory.boolValue
+    {
+        do {
+            logger.log("\(projectDir)")
+            try fileManager.createDirectory(
+                at: projectDirectoryURL, withIntermediateDirectories: true
+            )
+        } catch {
+            logger.log(
+                "ERROR: Could not create project directory: \(error.localizedDescription)"
+            )
+            return
+        }
+    }
+
+    let filePath = projectDirectoryURL.appendingPathComponent(
+        "\(fileName)_\(getTimeStamp())" + fileExtension)
+
+    do {
+        try encodedData.write(to: filePath)
+        logger.log("SUCCESS: Metal texture saved as \(fileExtension) at \(filePath.path)")
+        return
+    } catch {
+        logger.log(
+            "ERROR: Failed to write \(fileExtension) file: \(error.localizedDescription)"
+        )
         return
     }
+}
 
-    guard let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
-        completion?(false)
-        return
+// Assuming BGRA since we are dealing with metal
+public func texturePrintPixel(texture: MTLTexture, xPos: Int, yPos: Int) {
+    let region = MTLRegionMake2D(xPos, yPos, 1, 1)
+
+    let bytesPerPixel = getBytesPerPixel(format: texture.pixelFormat)
+
+    // Buffer to hold the pixel data
+    var pixelData = [UInt8](repeating: 0, count: bytesPerPixel)
+
+    // Get the pixel data
+    texture.getBytes(&pixelData,
+                     bytesPerRow: bytesPerPixel,
+                     from: region,
+                     mipmapLevel: 0)
+
+    // Print each pixel
+    let b = pixelData[0]
+    let g = pixelData[1]
+    let r = pixelData[2]
+    let a = pixelData[3]
+    logger.ilog("Pixel at (\(xPos), \(yPos)):  ----->   RGBA: (\(r), \(g), \(b), \(a))")
+}
+
+func getTimeStamp() -> String {
+    let dateFormatter = DateFormatter()
+    dateFormatter.dateFormat = "yyyyMMdd_HHmmss"
+    return dateFormatter.string(from: Date())
+}
+
+func getBytesPerPixel(format: MTLPixelFormat) -> Int {
+    switch format {
+    case .r8Unorm, .r8Snorm, .r8Uint, .r8Sint:
+        return 1
+    case .r16Unorm, .r16Snorm, .r16Uint, .r16Sint, .r16Float, .rg8Unorm, .rg8Snorm:
+        return 2
+    case .r32Float, .r32Uint, .r32Sint, .rg16Unorm, .rg16Snorm, .rg16Float:
+        return 4
+    case .rgba8Unorm, .rgba8Snorm, .rgba8Uint, .rgba8Sint, .bgra8Unorm:
+        return 4
+    case .rgba16Unorm, .rgba16Snorm, .rgba16Float:
+        return 8
+    case .rgba32Float, .rgba32Sint, .rgba32Uint:
+        return 16
+    // Add other formats as needed
+    default:
+        // For compressed formats, this is an approximation
+        return 4
     }
-
-    blitEncoder.copy(from: texture,
-                     sourceSlice: 0,
-                     sourceLevel: 0,
-                     sourceOrigin: MTLOriginMake(0, 0, 0),
-                     sourceSize: MTLSizeMake(width, height, 1),
-                     to: sharedBuffer,
-                     destinationOffset: 0,
-                     destinationBytesPerRow: bytesPerRow,
-                     destinationBytesPerImage: bufferSize)
-    blitEncoder.endEncoding()
-
-    // Create a dispatch group to coordinate parallel work
-    let group = DispatchGroup()
-
-    // Variable to store destination outside of closures
-    var destination: CGImageDestination?
-    var destinationCreationFailed = false
-    var colorSpace: CGColorSpace?
-    var bitmapInfo: CGBitmapInfo?
-
-    // Start a parallel task to create the destination
-    group.enter()
-    DispatchQueue.global().async {
-        if let dest = CGImageDestinationCreateWithURL(
-            url as CFURL, UTType.bmp.identifier as CFString, 1, nil
-        ) {
-            destination = dest
-            colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-            bitmapInfo = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue)
-        } else {
-            logger.log("Failed dest")
-            destinationCreationFailed = true
-        }
-        group.leave()
-    }
-
-    // Add completion handler to run when GPU finishes
-    commandBuffer.addCompletedHandler { [weak sharedBuffer] _ in
-        // This runs on a background thread when the GPU work finishes
-        guard let buffer = sharedBuffer else {
-            completion?(false)
-            return
-        }
-
-        let data = buffer.contents()
-
-        guard let colorSpace = colorSpace, let bitmapInfo = bitmapInfo else {
-            return
-        }
-
-        guard let context = CGContext(
-            data: data,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo.rawValue
-        ) else {
-            logger.log("Failed CGContext creation")
-            completion?(false)
-            return
-        }
-
-        guard let cgImage = context.makeImage() else {
-            logger.log("Failed context.makeImage")
-            completion?(false)
-            return
-        }
-
-        // Wait for destination creation to complete
-        group.wait()
-
-        // Check if destination creation succeeded
-        guard !destinationCreationFailed, let destination = destination else {
-            completion?(false)
-            return
-        }
-
-        CGImageDestinationAddImage(destination, cgImage, nil)
-        let success = CGImageDestinationFinalize(destination)
-
-        // Call completion on main thread if needed
-        if let completion = completion {
-            DispatchQueue.main.async {
-                completion(success)
-            }
-        }
-    }
-
-    // Just commit and continue - don't wait
-    commandBuffer.commit()
 }

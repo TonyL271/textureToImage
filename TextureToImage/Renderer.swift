@@ -27,12 +27,12 @@ class PurpleRenderer: NSObject, MTKViewDelegate {
         guard let blitQueue = device.makeCommandQueue() else {
             fatalError("ERROR: Failed to create blit command queue")
         }
-        blitCommandQueue = blitQueue
+        self.blitCommandQueue = blitQueue
 
-        texture = PurpleRenderer.createPurpleTexture(device: device)
-        pipelineState = PurpleRenderer.create2DPipelineState(device: device)
+        self.texture = PurpleRenderer.createPurpleTexture(device: device)
+        self.pipelineState = PurpleRenderer.create2DPipelineState(device: device)
 
-        let vertexDataSize = vertices.count * MemoryLayout<Float>.stride
+        let vertexDataSize = self.vertices.count * MemoryLayout<Float>.stride
         guard
             let buffer = device.makeBuffer(
                 bytes: vertices, length: vertexDataSize, options: []
@@ -40,7 +40,7 @@ class PurpleRenderer: NSObject, MTKViewDelegate {
         else {
             fatalError("ERROR: Failed to create vertex buffer")
         }
-        vertexBuffer = buffer
+        self.vertexBuffer = buffer
 
         super.init()
     }
@@ -114,11 +114,11 @@ class PurpleRenderer: NSObject, MTKViewDelegate {
             let renderEncoder = commandBuffer.makeRenderCommandEncoder(
                 descriptor: renderPassDescriptor)
         else { return }
-        renderEncoder.setRenderPipelineState(pipelineState)
-        renderEncoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+        renderEncoder.setRenderPipelineState(self.pipelineState)
+        renderEncoder.setVertexBuffer(self.vertexBuffer, offset: 0, index: 0)
 
         // Set the texture
-        renderEncoder.setFragmentTexture(texture, index: 0)
+        renderEncoder.setFragmentTexture(self.texture, index: 0)
         renderEncoder.drawPrimitives(
             type: .triangleStrip, vertexStart: 0, vertexCount: 4
         )
@@ -128,49 +128,42 @@ class PurpleRenderer: NSObject, MTKViewDelegate {
         guard let drawable = view.currentDrawable else { return }
 
         // Capture this frame if requested
-        if shouldCaptureNextFrame {
-            let mtlTexture = texture as MTLTexture
+        if self.shouldCaptureNextFrame {
+            let mtlTexture = self.texture
             let currentFileURL = URL(fileURLWithPath: #file)
-            guard
-                let destinationURL = URL(
-                    string: "file://" + currentFileURL.deletingLastPathComponent().path
-                        + "/Outputs")
-            else {
-                print("path fail")
-                return
-            }
+            let projectDir = currentFileURL.deletingLastPathComponent().path + "/Outputs"
+
+            // ---------------------------- Save Texture as PNG -------------------------------------------------------
+
+            texturePrintPixel(texture: self.texture, xPos: 0, yPos: 0)
             let startTimePNG = CFAbsoluteTimeGetCurrent()
-            let writeSucess = convertMetalTextureToPNG(
-                texture: texture, fileName: "texel",
-                projectDir: currentFileURL.deletingLastPathComponent().path
-                    + "/Outputs"
+            metalTextureToImage(
+                texture: drawable.texture, fileName: "screen",
+                projectDir: projectDir, outFormat: .png
             )
             let endTimePNG = CFAbsoluteTimeGetCurrent()
 
             let elapsedTimePNG = endTimePNG - startTimePNG
             logger.log("------PNG  took \(elapsedTimePNG) seconds")
 
-            // Create the texture processor
-
-            guard let drawable = view.currentDrawable else { return }
-
-            // Instead of `sourceTexture = texture`, use:
-            let sourceTexture = drawable.texture
+            // ---------------------------- Save Texture as heic -------------------------------------------------------
 
             let startTimeBMP = CFAbsoluteTimeGetCurrent()
-
             // Create a URL for a file in the Documents directory
             let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             let bmpFileURL = documentsPath.appendingPathComponent("metalTexture.bmp")
 
-            saveMetalTextureAsBMP(texture: sourceTexture, url: bmpFileURL)
+            metalTextureToImage(
+                texture: drawable.texture, fileName: "screen",
+                projectDir: projectDir, outFormat: .heic
+            )
 
             let endTimeBMP = CFAbsoluteTimeGetCurrent()
             let elapsedTime = endTimeBMP - startTimeBMP
             logger.log("------BMP  took \(elapsedTime) seconds")
             logger.log("\n\n")
 
-            shouldCaptureNextFrame = false // Reset flag
+            self.shouldCaptureNextFrame = false // Reset flag
         }
         commandBuffer.present(drawable)
         commandBuffer.commit()

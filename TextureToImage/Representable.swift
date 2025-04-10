@@ -3,6 +3,13 @@ import MetalKit
 import os.log
 import SwiftUI
 
+extension Logger {
+    func ilog(_ items: Any...) {
+        let stringified = items.map { String(describing: $0) }.joined(separator: "")
+        self.log("\(stringified)")
+    }
+}
+
 let logger = Logger(subsystem: "MetalDraw", category: "general")
 
 struct MetalView: UIViewRepresentable {
@@ -30,12 +37,12 @@ struct MetalView: UIViewRepresentable {
     }
 
     func updateUIView(_: MTKView, context: Context) {
-        if captureImage {
+        if self.captureImage {
             if let renderer = context.coordinator.renderer {
                 renderer.shouldCaptureNextFrame = true
             }
             DispatchQueue.main.async {
-                captureImage = false // Reset flag after triggering capture
+                self.captureImage = false // Reset flag after triggering capture
             }
         }
     }
